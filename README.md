@@ -30,7 +30,8 @@ To install this add-on in your Home Assistant instance:
 1.  **Add the Add-on Repository:**
     * Click the button below to directly add this repository to your Home Assistant Add-on Store:
 
-        [![Add repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_repository.svg)](https://my.home-assistant.io/redirect/supervisor_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fnavi-vonamut%2FFlatlib-Natal-Chart-AP)
+        [![Add Repository to Home Assistant](https://my.home-assistant.io/badges/add_repository.svg)](https://my.home-assistant.io/redirect/add_repository/?repository_url=https://github.com/navi-vonamut/Flatlib-Natal-Chart-API)
+
 
     * Alternatively, you can manually add the repository:
         * In Home Assistant, navigate to **Settings** > **Add-ons** > **Add-on Store**.
