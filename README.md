@@ -1,207 +1,112 @@
-# Home Assistant Flatlib Astrology Add-on
+# Home Assistant Flatlib Astrology API
 
-A lightweight Home Assistant Add-on providing a local Flask-based REST API for calculating **astrological natal charts and transits** using [Flatlib](https://github.com/flatangle/flatlib) and [Swiss Ephemeris](https://www.astro.com/swisseph/).
+A powerful Home Assistant Add-on providing a local **FastAPI** backend for advanced astrological calculations using [Flatlib](https://github.com/flatangle/flatlib) and [Swiss Ephemeris](https://www.astro.com/swisseph/).
 
----
+-----
 
-## 🌟 Overview
+## ✨ Overview
 
-This add-on spins up a local Flask server within your Home Assistant environment. It acts as a backend for complex astrological computations, offering a reliable API for various Home Assistant automations, integrations with Large Language Models (LLMs), or other external astrology tools. By keeping the computations local, it ensures privacy and faster response times.
+This add-on runs a high-performance **FastAPI server** directly within your Home Assistant environment. It serves as a robust backend for complex astrological computations, offering a reliable and fast API. By performing all calculations locally, it ensures your sensitive personal data remains private and secure.
 
----
+The add-on is designed to support a wide range of use cases, from simple automations to feeding structured data to Large Language Models (LLMs) for dynamic, personalized interpretations.
 
-## 🔮 Features
+-----
 
--   **Natal Chart Calculation:** Get precise positions of classical planets, lunar nodes, Lilith (Syzygy), Pars Fortuna, Ascendant, Midheaven, and house cusps based on birth data.
--   **Natal Aspects:** Calculate aspects between planets in the natal chart.
--   **Transit Chart Calculation:** Determine current planetary positions for any given date and time.
--   **Transit Aspects:** Compute interactive aspects between transit planets and natal chart positions, crucial for daily, monthly, or yearly forecasts.
--   **LLM Integration Ready:** Designed to provide structured astrological data (JSON) directly to LLMs (e.g., GPT, Claude, Ollama) for dynamic, personalized interpretations and guidance.
--   **Seamless Home Assistant Integration:** Easily used within Home Assistant automations, templates, and custom components.
--   **Local & Private:** All computations are performed locally on your Home Assistant server, ensuring your sensitive birth data remains private.
--   **Lightweight & Dockerized:** Built for efficiency and easy deployment within the Home Assistant Add-on ecosystem.
+## 🚀 Key Features (v0.2.0)
 
----
+  - **Backend Migration to FastAPI**: The server has been completely rewritten from Flask to FastAPI, offering significantly improved performance, asynchronous support, and modern API documentation.
+  - **Natal Chart Calculation**: Get a complete natal chart, including planets, lunar nodes, Lilith (Syzygy), Pars Fortuna, Ascendant, Midheaven, and house cusps.
+  - **Daily, Monthly, & Yearly Horoscopes**: New API endpoints to calculate **transits** and **predictions** for specific dates, months, or years.
+  - **Synastry Calculation**: An all-new endpoint to calculate compatibility between two natal charts.
+  - **LLM Integration Ready**: Designed to provide structured astrological data (JSON) directly to LLMs (e.g., GPT, Claude, Ollama) for personalized interpretations.
+  - **Local & Private**: All computations are performed locally on your Home Assistant server, ensuring sensitive birth data never leaves your network.
 
-## 🚀 Installation
+-----
+
+## 🔧 Installation
 
 To install this add-on in your Home Assistant instance:
 
 1.  **Add the Add-on Repository:**
-    * Click the button below to directly add this repository to your Home Assistant Add-on Store:
-
-        [![Open your Home Assistant instance and show the add add-on repository dialog with a specific repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fnavi-vonamut%2FFlatlib-Natal-Chart-API)
-
-    * Alternatively, you can manually add the repository:
-        * In Home Assistant, navigate to **Settings** > **Add-ons** > **Add-on Store**.
-        * Click the three dots in the top right corner and select **"Repositories"**.
-        * Enter the URL of this GitHub repository:
-            `https://github.com/navi-vonamut/Flatlib-Natal-Chart-AP`
-        * Click "Add", then "Close".
+      - Click the button below to add this repository to your Home Assistant Add-on Store:
+        [](https://www.google.com/search?q=%5Bhttps://my.home-assistant.io/redirect/supervisor_add_addon_repository/%3Frepository_url%3Dhttps%253A%252F%252Fgithub.com%252Fnavi-vonamut%252FFlatlib-Natal-Chart-AP%5D\(https://my.home-assistant.io/redirect/supervisor_add_addon_repository/%3Frepository_url%3Dhttps%253A%252F%252Fgithub.com%252Fnavi-vonamut%252FFlatlib-Natal-Chart-AP\))
+      - Or, manually add the repository URL: `https://github.com/navi-vonamut/Flatlib-Natal-Chart-AP`
 2.  **Install the Add-on:**
-    * Refresh the Add-on Store page (you might need to refresh your browser).
-    * You should now see a new add-on named "**Flatlib Natal Chart API**". Click on it.
-    * Click the **"Install"** button.
+      - In the Add-on Store, find "**Flatlib Astrology API**" and click "Install".
 
----
+-----
 
-## 🛠️ Configuration
+## 💻 API Endpoints
 
-After installation, go to the **"Configuration"** tab of the add-on.
+The FastAPI server is accessible within the Home Assistant Docker network at `http://a0d7b954-flatlib-server:8080`.
 
-* **`log_level` (Logging Level):** Adjust the verbosity of the add-on's logs. Recommended: `info` for normal operation, `debug` for troubleshooting.
+### 1\. Calculate Natal Chart (`POST /natal`)
 
----
-
-## 💡 API Usage
-
-The add-on runs a Flask server, accessible within the Home Assistant Docker network at `http://a0d7b954-flatlib-server:8080`. From outside the Home Assistant host, you'll need to configure port forwarding in the add-on settings (default: 8080/tcp).
-
-### Endpoints:
-
-#### 1. Calculate Natal Chart (`POST /natal`)
-
-Calculates a full natal chart including planets, special objects, angles, houses, and natal aspects.
-
-* **URL:** `http://<ADDON_HOST_IP_OR_NAME>:8080/natal`
-* **Content-Type:** `application/json`
-* **Request Body (JSON):**
+  * **Request:**
     ```json
     {
-      "date": "YYYY-MM-DD",  
-      "time": "HH:MM:SS",    
-      "tz": "±HH:MM",       
-      "lat": LATITUDE,      
-      "lon": LONGITUDE      
+      "date": "YYYY-MM-DD",
+      "time": "HH:MM:SS",
+      "tz": "±HH:MM",
+      "lat": LATITUDE,
+      "lon": LONGITUDE
     }
     ```
-    * `date`: Birth date (e.g., "1990-05-03").
-    * `time`: Birth time (e.g., "13:20:00").
-    * `tz`: Timezone offset from UTC (e.g., "+03:00").
-    * `lat`: Birth latitude (e.g., 56.2576).
-    * `lon`: Birth longitude (e.g., 43.9827).
+  * **Response:** A JSON object with all natal chart data, including planets, houses, angles, and aspects.
 
-* **Example Response (JSON - truncated for brevity):**
+### 2\. Daily Prediction (`POST /predict/daily`)
+
+  * **Request:** Same body as `/natal` plus a `target_date`.
     ```json
     {
-      "planets": {
-        "SUN": { "id": "SUN", "sign": "Taurus", "sign_pos": 12.73, "lon": 42.7302, ... },
-        "MOON": { "id": "MOON", "sign": "Virgo", "sign_pos": 1.6, "lon": 151.6033, ... },
-        ...
-      },
-      "special": { ... },
-      "angles": { ... },
-      "houses": { ... },
-      "aspects": [
-        { "p1_id": "SUN", "p2_id": "MERCURY", "type": "CONJUNCTION", "orb": 0.9, ... },
-        ...
-      ]
+      "date": "1990-05-03",
+      "time": "13:20:00",
+      "tz": "+03:00",
+      "lat": 56.2576,
+      "lon": 43.9827,
+      "target_date": "2025-08-07"
     }
     ```
+  * **Response:** Daily astrological predictions based on current transits.
 
-#### 2. Calculate Transits (`POST /transits`)
+### 3\. Monthly Prediction (`POST /predict/monthly`)
 
-Calculates transit aspects of current planets to natal chart positions.
+  * **Request:** Same as `/predict/daily`.
+  * **Response:** Monthly predictions and transit data.
 
-* **URL:** `http://<ADDON_HOST_IP_OR_NAME>:8080/transits`
-* **Content-Type:** `application/json`
-* **Request Body (JSON):**
+### 4\. Yearly Prediction (`POST /predict/yearly`)
+
+  * **Request:** Same as `/predict/daily`.
+  * **Response:** Yearly predictions and transit data.
+
+### 5\. Synastry (`POST /synastry`)
+
+  * **Request:**
     ```json
     {
-      "natal_date": "YYYY-MM-DD",   
-      "natal_time": "HH:MM:SS",     
-      "natal_tz": "±HH:MM",        
-      "natal_lat": LATITUDE,       
-      "natal_lon": LONGITUDE,      
-      "transit_date": "YYYY-MM-DD", 
-      "transit_time": "HH:MM:SS",   
-      "transit_tz": "±HH:MM"        
+      "chart1": { /* natal chart data for person 1 */ },
+      "chart2": { /* natal chart data for person 2 */ }
     }
     ```
-    * `natal_...`: Birth data (date, time, timezone, latitude, longitude).
-    * `transit_...`: Date, time, and timezone for which transit positions should be calculated. Transit latitude/longitude default to natal.
+  * **Response:** Compatibility analysis between the two charts.
 
-* **Example Response (JSON - truncated for brevity):**
-    ```json
-    {
-      "transit_aspects": [
-        { "p1_id": "MARS", "p2_id": "ASC", "type": "OPPOSITION", "orb": 0.9, ... },
-        ...
-      ],
-      "current_transits": {
-        "SUN": { "id": "SUN", "sign": "Cancer", "sign_pos": 22.34, "lon": 112.34, ... },
-        ...
-      }
-    }
-    ```
-
-#### 3. Health Check (`GET /health`)
-
-Check the status and supported objects of the API.
-
-* **URL:** `http://<ADDON_HOST_IP_OR_NAME>:8080/health`
-* **Example Response (JSON):**
-    ```json
-    {
-      "status": "OK",
-      "version": "0.1.0",
-      "supported_objects": {
-        "planets": ["SUN", "MOON", ...],
-        "special": ["NORTH_NODE", ...],
-        "angles": ["ASC", "MC"],
-        "aspects_calculated_for": ["SUN", "MOON", ...]
-      }
-    }
-    ```
-
-#### 4. Test Calculation (`GET /test`)
-
-A simple test endpoint to verify core functionality with predefined data.
-
-* **URL:** `http://<ADDON_HOST_IP_OR_NAME>:8080/test`
-* **Example Response (JSON):**
-    ```json
-    {
-      "status": "success",
-      "sun_sign": "Taurus",
-      "asc_sign": "Libra",
-      "house_1_sign": "Libra",
-      "test_aspect_count": 1
-    }
-    ```
-
----
+-----
 
 ## 🛠️ Tech Stack
 
-* **Python:** 3.11+
-* **`flatlib`:** `0.2.3` (Note: This specific version is used due to compatibility with `pyswisseph` and may have different API calls for aspects compared to newer `flatlib` versions.)
-* **`pyswisseph`:** `2.8.0.post1`
-* **Flask:** Lightweight web framework for the REST API.
+  * **Python:** 3.11+
+  * **`fastapi`**: The high-performance backend server.
+  * **`flatlib`**: `0.2.3`
+  * **`pyswisseph`**: `2.8.0.post1`
 
----
-
-## 🧠 Ideal for
-
-* **Smart Home Automations:** Integrate into Home Assistant, Node-RED, or n8n for personalized astrological triggers or insights.
-* **Telegram/Discord Bots:** Build bots that can provide astrological readings on demand.
-* **Astrological Dashboards:** Create custom dashboards or reports leveraging computed data.
-* **Voice Assistants & LLM Interpreters:** Feed structured astrological data to LLMs (like GPT, Claude, or local Ollama instances) for dynamic, human-like interpretations and guidance.
-
----
-
-## 🐳 Docker Support
-
-This add-on is designed to run within the Home Assistant Docker environment. The Dockerfile is included, allowing you to build and customize the image if needed.
-
----
+-----
 
 ## 🤝 Contribution
 
-Contributions are welcome! If you have suggestions or find issues, please open an issue or submit a pull request on GitHub.
+Contributions are welcome\! If you have suggestions or find issues, please open an issue or submit a pull request on GitHub.
 
----
+-----
 
 ## 📄 License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [MIT License](https://www.google.com/search?q=LICENSE).
