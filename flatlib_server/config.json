@@ -1,6 +1,6 @@
 {
   "name": "Flatlib Natal Chart API",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "slug": "flatlib_server",
   "description": "Home Assistant Add-on: Local API for Flatlib Natal Chart and Transit Calculations.",
   "startup": "application",
