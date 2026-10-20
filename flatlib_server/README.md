@@ -1,65 +1,70 @@
 # Flatlib Natal Chart API
 
-Локальный Home Assistant аддон, предоставляющий высокопроизводительный HTTP API для расширенных астрологических расчетов с использованием [Flatlib](https://github.com/flatangle/flatlib).
+Home Assistant add-on serving a local FastAPI backend for astrological calculations with
+[Flatlib](https://github.com/flatangle/flatlib) and the Swiss Ephemeris. All computation happens
+locally; birth data never leaves your network.
 
 -----
 
-## ✨ Обновление до версии v0.2.0
+## ✨ Features (v0.3.0)
 
-  * **Переход на FastAPI:** Бэкенд сервера был полностью переписан с Flask на **FastAPI**, что значительно повышает производительность и стабильность.
-  * **Расширенные возможности:** Добавлены новые эндпоинты для расчета ежедневных, ежемесячных, ежегодных предсказаний и синастрии.
-
------
-
-## 📄 Описание
-
-Этот аддон запускает высокопроизводительный **FastAPI-сервер** локально в вашей среде Home Assistant. Он служит мощным бэкендом для сложных астрологических вычислений, предлагая быстрый и надежный API. Все расчеты выполняются локально, что обеспечивает **конфиденциальность** ваших данных.
-
-Аддон предназначен для **интеграции с другими компонентами Home Assistant**, такими как автоматизации, сенсоры и скрипты, а также для передачи структурированных данных в LLM (Large Language Models) для персонализированных интерпретаций.
+- **Natal chart:** 10 planets (Sun through Pluto), lunar nodes, Lilith (Syzygy), Pars Fortuna,
+  Asc/MC, all 12 Placidus cusps, and the **house each body falls in**.
+- **Aspects:** major natal aspects (conjunction, opposition, trine, square, sextile) with orbs.
+- **Transits:** daily/monthly/yearly snapshots plus `/transits/range` for a window, with
+  applying/separating and exact-hit dates.
+- **Synastry:** cross-aspects between two charts, including angles.
+- **JSON throughout:** shaped for HA REST sensors, template sensors and LLM prompts.
 
 -----
 
-## 🔮 Возможности
+## 🛠️ Configuration
 
-  * **Расчёт натальной карты:** Полный расчет положений планет, углов (Asc, MC), куспидов домов, лунных узлов, Лилит (Syzygy) и Парса Фортуны.
-  * **Расчёт аспектов:** Определение натальных аспектов.
-  * **Ежедневные, ежемесячные, ежегодные предсказания:** Новые эндпоинты для расчета транзитов и предсказаний на определенные периоды.
-  * **Расчёт синастрии:** Новый эндпоинт для анализа совместимости двух натальных карт.
-  * **JSON-вывод:** Данные предоставляются в удобном формате JSON, готовом для обработки в Home Assistant или передачи в LLM.
+The add-on has no options to configure - start it and call the API.
 
 -----
 
-## 🛠️ Настройка
+## 💡 API
 
-После установки аддона перейдите на вкладку **"Конфигурация"** в пользовательском интерфейсе.
+Reachable inside the Home Assistant Docker network at `http://a0d7b954-flatlib-server:8080`.
+Interactive docs: `/docs` (or open `/`). Health: `/health`.
 
-  * **`log_level` (Уровень логирования):** Определяет детализацию логов аддона. Рекомендуется `info` для обычной работы. Для отладки используйте `debug`.
+Every chart request takes the same birth body; `date` accepts `YYYY-MM-DD` or `YYYY/MM/DD`:
+
+```json
+{
+  "date": "1990-05-03",
+  "time": "13:20:00",
+  "tz": "+03:00",
+  "lat": 56.2576,
+  "lon": 43.9827
+}
+```
+
+### Endpoints
+
+| Endpoint | Method | Purpose |
+| --- | --- | --- |
+| `/natal` | POST | Planets, special points, angles, houses, aspects |
+| `/predict/daily` | POST | Transits on `target_date` (default: today) |
+| `/predict/monthly` | POST | Transits on the 1st of next month (base: `target_date` or today) |
+| `/predict/yearly` | POST | Transits on Jan 1 of next year (base: `target_date` or today) |
+| `/transits/range` | POST | Deduplicated transits across `start_date`..`end_date`, with `first_seen`, `last_seen`, `exact_dates`, `min_orb` |
+| `/synastry` | POST | `{"person1": {...}, "person2": {...}}` cross-aspects |
+| `/health` | GET | Status, version and supported objects |
+
+Each body in `/natal` carries `sign`, `sign_pos` (degrees into sign), `lon`, `lat`, `speed`,
+`retrograde` and `house`. Transits carry `transit_planet`, `aspect`, `natal_planet`, `orb`,
+`is_applying`, `is_exact`, both signs and the natal `natal_house`.
 
 -----
 
-## 💡 Использование API
+## ❓ Support
 
-Сервер доступен по адресу `http://a0d7b954-flatlib-server:8080`. Для доступа извне Home Assistant, настройте перенаправление портов в конфигурации аддона.
-
-### Основные эндпоинты:
-
-  * **`/natal` (POST):** Для расчета натальной карты.
-  * **`/predict/daily` (POST):** Для ежедневных предсказаний.
-  * **`/predict/monthly` (POST):** Для ежемесячных предсказаний.
-  * **`/predict/yearly` (POST):** Для ежегодных предсказаний.
-  * **`/synastry` (POST):** Для расчета синастрии.
-  * **`/health` (GET):** Проверка статуса работы API.
-
-Подробные примеры запросов и ответов для всех эндпоинтов доступны в основном [README репозитория](https://www.google.com/search?q=https://github.com/navi-vonamut/Flatlib-Natal-Chart-API/blob/main/README.md).
+Open an issue in this repository.
 
 -----
 
-## ❓ Поддержка и обратная связь
+## 📄 License
 
-Если у вас возникнут вопросы или проблемы, пожалуйста, создайте [Issue в основном репозитории GitHub](https://www.google.com/search?q=https://github.com/navi-vonamut/Flatlib-Natal-Chart-API/issues).
-
------
-
-## 📄 Лицензия
-
-Этот аддон распространяется под лицензией [MIT License](https://www.google.com/search?q=LICENSE).
+MIT

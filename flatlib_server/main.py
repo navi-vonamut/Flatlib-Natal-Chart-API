@@ -1,422 +1,518 @@
-import logging
-from typing import List, Dict, Any
+"""Home Assistant Flatlib Astrology API.
 
+Local FastAPI backend for natal charts, transits and synastry, built on
+flatlib + Swiss Ephemeris.
+"""
+
+import logging
+from datetime import date as Date, datetime, timedelta
+from typing import Any, Dict, List, Optional
+
+from dateutil.relativedelta import relativedelta
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, ConfigDict, Field
+
+from flatlib import const
+from flatlib.chart import Chart
 from flatlib.datetime import Datetime
 from flatlib.geopos import GeoPos
-from flatlib.chart import Chart
-from flatlib import const
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-from datetime import datetime
-from dateutil.relativedelta import relativedelta
+# Keep in sync with config.json
+APP_VERSION = "0.3.0"
 
-# Настройка логгирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# --- Константы Flatlib ---
+# --- Flatlib constants ---
 PLANET_IDS = [
     const.SUN, const.MOON, const.MERCURY, const.VENUS, const.MARS,
-    const.JUPITER, const.SATURN
+    const.JUPITER, const.SATURN, const.URANUS, const.NEPTUNE, const.PLUTO,
 ]
 SPECIAL_OBJECTS = [
-    const.NORTH_NODE, const.SOUTH_NODE, 
-    const.SYZYGY, 
-    const.PARS_FORTUNA
+    const.NORTH_NODE, const.SOUTH_NODE,
+    const.SYZYGY,
+    const.PARS_FORTUNA,
 ]
+# flatlib defaults to LIST_OBJECTS_TRADITIONAL (Sun..Saturn only) - be explicit.
+OBJECT_IDS = PLANET_IDS + SPECIAL_OBJECTS
 ANGLE_IDS = [const.ASC, const.MC]
 ASPECT_TYPES = [
-    const.NO_ASPECT, const.CONJUNCTION, const.OPPOSITION,
-    const.SQUARE, const.TRINE, const.SEXTILE
+    const.CONJUNCTION, const.OPPOSITION, const.SQUARE, const.TRINE, const.SEXTILE,
 ]
 ASPECT_NAMES = {
     const.CONJUNCTION: "Conjunction",
     const.OPPOSITION: "Opposition",
     const.SQUARE: "Square",
     const.TRINE: "Trine",
-    const.SEXTILE: "Sextile"
+    const.SEXTILE: "Sextile",
+}
+EXACT_ANGLES = {
+    const.CONJUNCTION: 0.0,
+    const.OPPOSITION: 180.0,
+    const.SQUARE: 90.0,
+    const.TRINE: 120.0,
+    const.SEXTILE: 60.0,
 }
 TRANSIT_ORBS = {
-    const.CONJUNCTION: 8,
-    const.OPPOSITION: 8,
-    const.SQUARE: 7,
-    const.TRINE: 7,
-    const.SEXTILE: 5,
+    const.CONJUNCTION: 8.0,
+    const.OPPOSITION: 8.0,
+    const.SQUARE: 7.0,
+    const.TRINE: 7.0,
+    const.SEXTILE: 5.0,
+}
+NATAL_ASPECT_ORBS = {
+    const.CONJUNCTION: 8.0,
+    const.OPPOSITION: 8.0,
+    const.SQUARE: 6.0,
+    const.TRINE: 6.0,
+    const.SEXTILE: 4.0,
 }
 
-# --- Pydantic модели ---
-class NatalChartRequest(BaseModel):
-    date: str = Field(..., description="Дата рождения (YYYY/MM/DD)", example="1990/05/03")
-    time: str = Field(..., description="Время рождения (HH:MM:SS)", example="13:20:00")
-    tz: str = Field(..., description="Часовой пояс (+HH:MM или -HH:MM)", example="+03:00")
-    lat: float = Field(..., description="Широта", example=56.2575)
-    lon: float = Field(..., description="Долгота", example=43.9824)
+# --- Date helpers ---
+_DATE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%dT%H:%M:%S", "%d.%m.%Y")
 
-class DailyPredictionRequest(BaseModel):
-    date: str = Field(..., description="Дата рождения (YYYY/MM/DD)", example="1990/05/03")
-    time: str = Field(..., description="Время рождения (HH:MM:SS)", example="13:20:00")
-    tz: str = Field(..., description="Часовой пояс (+HH:MM или -HH:MM)", example="+03:00")
-    lat: float = Field(..., description="Широта", example=56.2575)
-    lon: float = Field(..., description="Долгота", example=43.9824)
-    target_date: str = Field(..., description="Целевая дата для прогноза (YYYY/MM/DD)", example="2025/08/15")
 
-class YearlyPredictionRequest(BaseModel):
-    date: str = Field(..., description="Дата рождения (YYYY/MM/DD)", example="1990/05/03")
-    time: str = Field(..., description="Время рождения (HH:MM:SS)", example="13:20:00")
-    tz: str = Field(..., description="Часовой пояс (+HH:MM или -HH:MM)", example="+03:00")
-    lat: float = Field(..., description="Широта", example=56.2575)
-    lon: float = Field(..., description="Долгота", example=43.9824)
-    age: int = Field(..., description="Возраст, на который делается прогноз", example=35)
+def parse_date(value: str, field: str = "date") -> Date:
+    """Parse an ISO-ish date; accepts 1990-05-03, 1990/05/03, 03.05.1990."""
+    text = (value or "").strip()
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    raise HTTPException(
+        status_code=422,
+        detail=f"Invalid {field} '{value}': expected YYYY-MM-DD or YYYY/MM/DD",
+    )
+
+
+def flatlib_date(day: Date) -> str:
+    return day.strftime("%Y/%m/%d")
+
+
+# --- Pydantic models ---
+_BIRTH_EXAMPLE = {
+    "date": "1990-05-03",
+    "time": "13:20:00",
+    "tz": "+03:00",
+    "lat": 56.2576,
+    "lon": 43.9827,
+}
+
+
+class BirthData(BaseModel):
+    """Birth data used to build a chart."""
+
+    model_config = ConfigDict(json_schema_extra={"example": _BIRTH_EXAMPLE})
+
+    date: str = Field(..., description="Birth date (YYYY-MM-DD or YYYY/MM/DD)")
+    time: str = Field(..., description="Birth time (HH:MM:SS)")
+    tz: str = Field(..., description="UTC offset of birth place (+HH:MM or -HH:MM)")
+    lat: float = Field(..., ge=-90, le=90, description="Latitude")
+    lon: float = Field(..., ge=-180, le=180, description="Longitude")
+
+
+class NatalChartRequest(BirthData):
+    pass
+
+
+class DailyPredictionRequest(BirthData):
+    target_date: Optional[str] = Field(
+        None,
+        description="Date to cast transits for (YYYY-MM-DD). Defaults to today.",
+    )
+
+
+class MonthlyPredictionRequest(BirthData):
+    target_date: Optional[str] = Field(
+        None,
+        description="Base date (YYYY-MM-DD). Transits are cast for the 1st of the following month. Defaults to today.",
+    )
+
+
+class YearlyPredictionRequest(BirthData):
+    target_date: Optional[str] = Field(
+        None,
+        description="Base date (YYYY-MM-DD). Transits are cast for Jan 1 of the following year. Defaults to today.",
+    )
+
 
 class Transit(BaseModel):
-    """Модель для описания одного транзитного аспекта."""
+    """One transit aspect: a transiting body aspecting a natal body."""
+
     transit_planet: str
     aspect: str
     natal_planet: str
     orb: float
     is_applying: bool = False
+    is_exact: bool = False
+    transit_sign: Optional[str] = None
+    natal_sign: Optional[str] = None
+    natal_house: Optional[int] = None
+
 
 class TransitsResponse(BaseModel):
-    """Модель для ответа с транзитными аспектами."""
     target_date: str
-    transits: List[Transit]
-    
+    transits: List[Transit] = Field(default_factory=list)
+
+
 class SynastryRequest(BaseModel):
-    """Модель для запроса синастрии (две натальные карты)."""
-    person1: NatalChartRequest
-    person2: NatalChartRequest
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"person1": _BIRTH_EXAMPLE, "person2": _BIRTH_EXAMPLE}}
+    )
 
-# --- Вспомогательные функции ---
-def get_planet_data(obj):
-    is_retrograde = obj.isRetrograde
-    if callable(is_retrograde):
-        is_retrograde = is_retrograde()
+    person1: BirthData
+    person2: BirthData
+
+
+class RangeRequest(BirthData):
+    start_date: str = Field(..., description="Window start (YYYY-MM-DD)")
+    end_date: Optional[str] = Field(None, description="Window end (YYYY-MM-DD). Defaults to start + 30 days.")
+    step_days: int = Field(1, ge=1, le=30, description="Days between samples")
+
+
+# --- Chart helpers ---
+def birth_chart(data: BirthData) -> Chart:
+    day = parse_date(data.date, "date")
+    try:
+        dt = Datetime(flatlib_date(day), data.time, data.tz)
+        pos = GeoPos(data.lat, data.lon)
+        return Chart(dt, pos, hsys=const.HOUSES_PLACIDUS, IDs=OBJECT_IDS)
+    except HTTPException:
+        raise
+    except Exception as exc:  # flatlib/PySwissEph raise bare exceptions
+        logging.error("Error building chart: %s", exc, exc_info=True)
+        raise HTTPException(status_code=422, detail=f"Could not build chart: {exc}")
+
+
+def transit_chart(data: BirthData, target: Date, time_str: str = "12:00:00") -> Chart:
+    try:
+        dt = Datetime(flatlib_date(target), time_str, data.tz)
+        return Chart(dt, GeoPos(data.lat, data.lon), hsys=const.HOUSES_PLACIDUS, IDs=OBJECT_IDS)
+    except Exception as exc:
+        logging.error("Error building transit chart: %s", exc, exc_info=True)
+        raise HTTPException(status_code=422, detail=f"Could not build transit chart: {exc}")
+
+
+def _is_retrograde(obj: Any) -> bool:
+    value = obj.isRetrograde
+    return bool(value() if callable(value) else value)
+
+
+def _speed(obj: Any) -> float:
+    return float(getattr(obj, "lonspeed", 0.0) or 0.0)
+
+
+def house_table(chart: Chart) -> List[Any]:
+    """Houses sorted by longitude as [(cusp_lon, house_number), ...]."""
+    table = []
+    for house in chart.houses:
+        digits = "".join(ch for ch in house.id if ch.isdigit())
+        if digits:
+            table.append((house.lon, int(digits)))
+    table.sort()
+    return table
+
+
+def house_of(table: List[Any], lon: float) -> Optional[int]:
+    """House number containing an ecliptic longitude (quadrant houses wrap at 0)."""
+    if not table:
+        return None
+    for index, (start, number) in enumerate(table):
+        end = table[(index + 1) % len(table)][0]
+        if start <= end:
+            if start <= lon < end:
+                return number
+        elif lon >= start or lon < end:
+            return number
+    return table[-1][1]
+
+
+def get_body_data(obj: Any, houses: List[Any]) -> Dict[str, Any]:
     return {
         "id": obj.id,
         "sign": obj.sign,
         "sign_pos": round(obj.signlon, 2),
         "lon": round(obj.lon, 4),
         "lat": round(obj.lat, 4),
-        "speed": round(obj.lonspeed, 4),
-        "retrograde": bool(is_retrograde)
+        "speed": round(_speed(obj), 4),
+        "retrograde": _is_retrograde(obj),
+        "house": house_of(houses, obj.lon),
     }
 
-def get_special_object_data(obj):
-    is_retrograde = obj.isRetrograde
-    if callable(is_retrograde):
-        is_retrograde = is_retrograde()
+
+def get_angle_data(obj: Any, houses: List[Any]) -> Dict[str, Any]:
     return {
         "id": obj.id,
         "sign": obj.sign,
         "sign_pos": round(obj.signlon, 2),
         "lon": round(obj.lon, 4),
-        "lat": round(obj.lat, 4),
-        "speed": round(obj.lonspeed, 4),
-        "retrograde": bool(is_retrograde)
+        "house": house_of(houses, obj.lon),
     }
 
-def get_angle_data(obj):
-    return {
-        "id": obj.id,
-        "sign": obj.sign,
-        "sign_pos": round(obj.signlon, 2),
-        "lon": round(obj.lon, 4)
-    }
 
-def get_house_data(house):
+def get_house_data(house: Any) -> Dict[str, Any]:
     return {
         "id": house.id,
         "sign": house.sign,
         "sign_pos": round(house.signlon, 2),
-        "lon": round(house.lon, 4)
+        "lon": round(house.lon, 4),
     }
 
-def calculate_aspects(chart):
-    """Рассчитывает аспекты между всеми объектами карты."""
-    aspects = []
-    
-    all_objects = []
-    for o_id in PLANET_IDS + SPECIAL_OBJECTS + ANGLE_IDS:
+
+def _chart_objects(chart: Chart, ids: List[str]) -> List[Any]:
+    objects = []
+    for obj_id in ids:
         try:
-            obj = chart.get(o_id)
-            all_objects.append(obj)
-        except:
-            continue
-    
-    ORBS = {const.CONJUNCTION: 8.0, const.OPPOSITION: 8.0, const.SQUARE: 6.0, const.TRINE: 6.0, const.SEXTILE: 4.0}
-    EXACT_ANGLES = {const.CONJUNCTION: 0, const.SEXTILE: 60, const.SQUARE: 90, const.TRINE: 120, const.OPPOSITION: 180}
-    
-    for i in range(len(all_objects)):
-        for j in range(i + 1, len(all_objects)):
-            obj1, obj2 = all_objects[i], all_objects[j]
-            distance = abs(obj1.lon - obj2.lon)
-            if distance > 180:
-                distance = 360 - distance
-            
-            for aspect_type, max_orb in ORBS.items():
-                exact_angle = EXACT_ANGLES[aspect_type]
-                orb = abs(distance - exact_angle)
-                
-                if orb > 180:
-                    orb = 360 - orb
-                
+            objects.append(chart.get(obj_id))
+        except Exception as exc:
+            logging.debug("Object %s unavailable: %s", obj_id, exc)
+    return objects
+
+
+def short_delta(lon1: float, lon2: float) -> float:
+    """Signed shortest angular distance from lon2 to lon1, in (-180, 180]."""
+    return (lon1 - lon2 + 180.0) % 360.0 - 180.0
+
+
+def calculate_aspects(chart: Chart) -> List[Dict[str, Any]]:
+    """Aspects between all chart bodies and angles."""
+    aspects = []
+    objects = _chart_objects(chart, PLANET_IDS + SPECIAL_OBJECTS + ANGLE_IDS)
+
+    for i in range(len(objects)):
+        for j in range(i + 1, len(objects)):
+            obj1, obj2 = objects[i], objects[j]
+            delta = short_delta(obj1.lon, obj2.lon)
+            distance = abs(delta)
+
+            for aspect_type, max_orb in NATAL_ASPECT_ORBS.items():
+                orb = abs(distance - EXACT_ANGLES[aspect_type])
                 if orb <= max_orb:
-                    aspect_name = ASPECT_NAMES.get(aspect_type, f"Unknown-{aspect_type}")
                     aspects.append({
-                        "id1": obj1.id, "id2": obj2.id, "type": aspect_name,
-                        "difference": round(distance, 4), "orb": round(orb, 4)
+                        "id1": obj1.id,
+                        "id2": obj2.id,
+                        "type": ASPECT_NAMES[aspect_type],
+                        "difference": round(distance, 4),
+                        "orb": round(orb, 4),
                     })
                     break
     return aspects
-    
-def get_transits_for_date(natal_data: dict, target_date: str) -> List[Dict[str, Any]]:
+
+
+def compute_transits(natal: Chart, data: BirthData, target: Date,
+                     time_str: str = "12:00:00") -> List[Dict[str, Any]]:
+    """Transits: transiting bodies aspecting natal bodies and angles.
+
+    A transiting planet aspecting its own natal position (e.g. Sun to natal Sun,
+    the annual return) is included - that is one of the most meaningful transits.
     """
-    Рассчитывает транзитные аспекты на конкретную дату, используя старый метод.
-    """
-    try:
-        # 1. Создаём натальную карту
-        birth_date = Datetime(natal_data['date'].replace("-", "/"), natal_data['time'], natal_data['tz'])
-        birth_pos = GeoPos(natal_data['lat'], natal_data['lon'])
-        natal_chart = Chart(birth_date, birth_pos)
+    transiting = transit_chart(data, target, time_str)
+    natal_targets = _chart_objects(natal, OBJECT_IDS + ANGLE_IDS)
+    natal_houses = house_table(natal)
 
-        # 2. Создаём транзитную карту на текущую дату
-        transit_date = Datetime(target_date.replace("-", "/"), '12:00:00', natal_data['tz'])
-        transit_pos = birth_pos
-        transit_chart = Chart(transit_date, transit_pos)
+    transits = []
+    for trans_obj in _chart_objects(transiting, PLANET_IDS + SPECIAL_OBJECTS):
+        for natal_obj in natal_targets:
+            delta = short_delta(trans_obj.lon, natal_obj.lon)
+            distance = abs(delta)
+            # The natal chart is frozen: only the transiting body moves.
+            # (Using the natal body's own speed flips the applying flag for
+            # same-planet transits, e.g. Sun to natal Sun.)
+            rel_speed = _speed(trans_obj)
 
-        transits = []
-        
-        # 3. Получаем списки объектов из обеих карт
-        natal_objects = natal_chart.objects
-        transit_objects = transit_chart.objects
-
-        # 4. Вручную рассчитываем аспекты между транзитными и натальными объектами
-        for transit_obj in transit_objects:
-            for natal_obj in natal_objects:
-                # Проверяем, что это не один и тот же объект в разных картах
-                if transit_obj.id == natal_obj.id:
+            for aspect_type, max_orb in TRANSIT_ORBS.items():
+                exact_angle = EXACT_ANGLES[aspect_type]
+                orb = abs(distance - exact_angle)
+                if orb > max_orb:
                     continue
 
-                distance = abs(transit_obj.lon - natal_obj.lon)
-                if distance > 180:
-                    distance = 360 - distance
+                is_exact = orb < 0.05
+                # Excess = how far past the exact angle; applying when it shrinks.
+                excess = distance - exact_angle
+                rate = (1.0 if delta >= 0 else -1.0) * rel_speed
+                is_applying = (not is_exact) and excess * rate < 0
 
-                for aspect_type, max_orb in TRANSIT_ORBS.items():
-                    # Рассчитываем точный угол для каждого аспекта
-                    if aspect_type == const.CONJUNCTION:
-                        exact_angle = 0
-                    elif aspect_type == const.OPPOSITION:
-                        exact_angle = 180
-                    elif aspect_type == const.SQUARE:
-                        exact_angle = 90
-                    elif aspect_type == const.TRINE:
-                        exact_angle = 120
-                    elif aspect_type == const.SEXTILE:
-                        exact_angle = 60
-                    else:
-                        continue # Пропускаем, если аспект не поддерживается
+                transits.append({
+                    "transit_planet": trans_obj.id,
+                    "aspect": ASPECT_NAMES[aspect_type],
+                    "natal_planet": natal_obj.id,
+                    "orb": round(orb, 2),
+                    "is_applying": bool(is_applying),
+                    "is_exact": bool(is_exact),
+                    "transit_sign": trans_obj.sign,
+                    "natal_sign": natal_obj.sign,
+                    "natal_house": house_of(natal_houses, natal_obj.lon),
+                })
+                break
 
-                    orb = abs(distance - exact_angle)
-                    
-                    if orb <= max_orb:
-                        aspect_name = ASPECT_NAMES.get(aspect_type, f"Unknown-{aspect_type}")
-                        transits.append({
-                            'transit_planet': transit_obj.id,
-                            'aspect': aspect_name, # Используем человекочитаемое имя
-                            'natal_planet': natal_obj.id,
-                            'orb': round(orb, 2),
-                            # Упрощенная логика is_applying. Можно доработать
-                            'is_applying': False, 
-                        })
-                        break
-        return transits
-    except Exception as e:
-        # Добавляем логгирование для более детальной информации об ошибке
-        logging.error(f"Error in get_transits_for_date: {e}", exc_info=True)
-        raise e
+    transits.sort(key=lambda t: (t["orb"], t["transit_planet"], t["natal_planet"]))
+    return transits
 
-# --- FastAPI-приложение ---
-app = FastAPI()
+
+# --- FastAPI app ---
+app = FastAPI(
+    title="Flatlib Natal Chart API",
+    version=APP_VERSION,
+    description="Local astrology API (natal charts, transits, synastry) for Home Assistant.",
+)
+
+
+@app.get("/", include_in_schema=False)
+def root():
+    return RedirectResponse(url="/docs")
+
 
 @app.post("/natal", response_model=Dict[str, Any])
-async def get_natal_chart(request: NatalChartRequest):
-    """
-    Эндпоинт для расчета натальной карты.
-    """
-    try:
-        date_str = request.date.replace("-", "/")
-        dt = Datetime(date_str, request.time, request.tz)
-        pos = GeoPos(request.lat, request.lon)
-        
-        logging.info(f"Calculating chart for date='{dt}', pos=({request.lat}, {request.lon})")
-        
-        chart = Chart(dt, pos, hsys=const.HOUSES_PLACIDUS)
-        
-        result = {}
-        result['planets'] = {obj.id: get_planet_data(chart.get(obj.id)) for obj in chart.objects if obj.id in PLANET_IDS}
-        result['special'] = {obj.id: get_special_object_data(chart.get(obj.id)) for obj in chart.objects if obj.id in SPECIAL_OBJECTS}
-        
-        angles = {}
-        for angle_id in ANGLE_IDS:
-            try:
-                angle_obj = chart.get(angle_id)
-                angles[angle_id] = get_angle_data(angle_obj)
-            except Exception as e:
-                logging.warning(f"Could not get angle {angle_id}: {e}")
-                
-        result['angles'] = angles
-        
-        result['houses'] = {f"House {h.id}": get_house_data(h) for h in chart.houses}
-        result['aspects'] = calculate_aspects(chart)
-        
-        return result
-        
-    except Exception as e:
-        logging.error(f"Error processing request: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An internal error occurred")
+def get_natal_chart(request: NatalChartRequest):
+    """Full natal chart: planets, special points, angles, houses, aspects."""
+    chart = birth_chart(request)
+    houses = house_table(chart)
+
+    planets = {}
+    special = {}
+    for obj in _chart_objects(chart, OBJECT_IDS):
+        if obj.id in PLANET_IDS:
+            planets[obj.id] = get_body_data(obj, houses)
+        elif obj.id in SPECIAL_OBJECTS:
+            special[obj.id] = get_body_data(obj, houses)
+
+    angles = {}
+    for obj in _chart_objects(chart, ANGLE_IDS):
+        angles[obj.id] = get_angle_data(obj, houses)
+
+    return {
+        "planets": planets,
+        "special": special,
+        "angles": angles,
+        "houses": {house.id: get_house_data(house) for house in chart.houses},
+        "aspects": calculate_aspects(chart),
+    }
 
 
 @app.post("/predict/daily", response_model=Dict[str, Any])
-async def predict_daily(request: DailyPredictionRequest):
-    """
-    Эндпоинт для расчета ежедневных транзитов.
-    """
-    try:
-        transits = get_transits_for_date(request.dict(), request.target_date)
-        if not transits:
-            return {"message": "На указанную дату значимых транзитных аспектов не найдено."}
-        return {"target_date": request.target_date, "transits": transits}
-    except Exception as e:
-        logging.error(f"Error processing request: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=400, detail=str(e))
-    
+def predict_daily(request: DailyPredictionRequest):
+    """Transits active on a date (defaults to today)."""
+    target = parse_date(request.target_date, "target_date") if request.target_date else Date.today()
+    transits = compute_transits(birth_chart(request), request, target)
+    response: Dict[str, Any] = {"target_date": target.isoformat(), "transits": transits}
+    if not transits:
+        response["message"] = "No major transit aspects on this date."
+    return response
 
-# Новый эндпоинт для месячного прогноза
+
 @app.post("/predict/monthly", response_model=TransitsResponse)
-async def predict_monthly(request: NatalChartRequest):
-    """
-    Расчет транзитов на первый день следующего месяца для месячного прогноза.
-    """
-    try:
-        # Получаем дату натальной карты
-        natal_datetime = Datetime(request.date.replace("-", "/"), request.time, request.tz)
-
-        # Вычисляем дату следующего месяца
-        current_date = datetime.strptime(request.date, "%Y-%m-%d").date()
-        next_month_date = current_date.replace(day=1) + relativedelta(months=1)
-        target_date_str = next_month_date.strftime("%Y-%m-%d")
-
-        # Получаем транзиты для этой даты
-        transits = get_transits_for_date(request.dict(), target_date_str)
-
-        return {"target_date": target_date_str, "transits": transits}
-    except Exception as e:
-        logging.error(f"Error in predict_monthly: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An internal error occurred while processing monthly prediction.")
+def predict_monthly(request: MonthlyPredictionRequest):
+    """Transits cast for the 1st of the month following the base date (default today)."""
+    base = parse_date(request.target_date, "target_date") if request.target_date else Date.today()
+    target = base.replace(day=1) + relativedelta(months=1)
+    transits = compute_transits(birth_chart(request), request, target)
+    return {"target_date": target.isoformat(), "transits": transits}
 
 
-# Новый эндпоинт для годового прогноза
 @app.post("/predict/yearly", response_model=TransitsResponse)
-async def predict_yearly(request: NatalChartRequest):
+def predict_yearly(request: YearlyPredictionRequest):
+    """Transits cast for Jan 1 of the year following the base date (default today)."""
+    base = parse_date(request.target_date, "target_date") if request.target_date else Date.today()
+    target = base.replace(month=1, day=1) + relativedelta(years=1)
+    transits = compute_transits(birth_chart(request), request, target)
+    return {"target_date": target.isoformat(), "transits": transits}
+
+
+@app.post("/transits/range", response_model=Dict[str, Any])
+def transits_range(request: RangeRequest):
+    """Transit aspects active during a window, deduplicated per aspect pair.
+
+    Returns each transit once with the dates it was in orb, the exact-hit dates
+    and the tightest orb seen - the useful shape for "what happens this month".
     """
-    Расчет транзитов на 1 января следующего года для годового прогноза.
-    """
-    try:
-        # Получаем дату натальной карты
-        natal_datetime = Datetime(request.date.replace("-", "/"), request.time, request.tz)
+    start = parse_date(request.start_date, "start_date")
+    end = parse_date(request.end_date, "end_date") if request.end_date else start + timedelta(days=30)
+    if end < start:
+        raise HTTPException(status_code=422, detail="end_date must not be before start_date")
 
-        # Вычисляем дату следующего года
-        current_date = datetime.strptime(request.date, "%Y-%m-%d").date()
-        next_year_date = current_date.replace(month=1, day=1) + relativedelta(years=1)
-        target_date_str = next_year_date.strftime("%Y-%m-%d")
+    samples = ((end - start).days // request.step_days) + 1
+    if samples > 400:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Window too large: {samples} samples (max 400). Widen step_days.",
+        )
 
-        # Получаем транзиты для этой даты
-        transits = get_transits_for_date(request.dict(), target_date_str)
+    natal = birth_chart(request)
+    collected: Dict[Any, Dict[str, Any]] = {}
+    day = start
+    while day <= end:
+        for transit in compute_transits(natal, request, day):
+            key = (transit["transit_planet"], transit["aspect"], transit["natal_planet"])
+            entry = collected.get(key)
+            if entry is None:
+                entry = {
+                    **{k: transit[k] for k in
+                       ("transit_planet", "aspect", "natal_planet", "transit_sign",
+                        "natal_sign", "natal_house")},
+                    "min_orb": transit["orb"],
+                    "first_seen": day.isoformat(),
+                    "last_seen": day.isoformat(),
+                    "exact_dates": [],
+                }
+                collected[key] = entry
+            entry["last_seen"] = day.isoformat()
+            if transit["orb"] < entry["min_orb"]:
+                entry["min_orb"] = transit["orb"]
+            if transit["is_exact"] and day.isoformat() not in entry["exact_dates"]:
+                entry["exact_dates"].append(day.isoformat())
+        day += timedelta(days=request.step_days)
 
-        return {"target_date": target_date_str, "transits": transits}
-    except Exception as e:
-        logging.error(f"Error in predict_yearly: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An internal error occurred while processing yearly prediction.")
+    entries = sorted(collected.values(), key=lambda e: (e["min_orb"], e["transit_planet"]))
+    return {
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "step_days": request.step_days,
+        "count": len(entries),
+        "transits": entries,
+    }
 
-# Новый эндпоинт для синастрии
+
 @app.post("/synastry", response_model=Dict[str, Any])
-async def synastry(request: SynastryRequest):
-    """
-    Расчет синастрических аспектов между двумя натальными картами.
-    """
-    try:
-        # 1. Создаем натальную карту для первого человека
-        person1_date = Datetime(request.person1.date.replace("-", "/"), request.person1.time, request.person1.tz)
-        person1_pos = GeoPos(request.person1.lat, request.person1.lon)
-        person1_chart = Chart(person1_date, person1_pos)
+def synastry(request: SynastryRequest):
+    """Cross-aspects between two natal charts (bodies and angles)."""
+    chart1 = birth_chart(request.person1)
+    chart2 = birth_chart(request.person2)
 
-        # 2. Создаем натальную карту для второго человека
-        person2_date = Datetime(request.person2.date.replace("-", "/"), request.person2.time, request.person2.tz)
-        person2_pos = GeoPos(request.person2.lat, request.person2.lon)
-        person2_chart = Chart(person2_date, person2_pos)
+    objects1 = _chart_objects(chart1, PLANET_IDS + ANGLE_IDS)
+    objects2 = _chart_objects(chart2, PLANET_IDS + ANGLE_IDS)
 
-        synastry_aspects = []
+    aspects = []
+    for obj1 in objects1:
+        for obj2 in objects2:
+            delta = short_delta(obj1.lon, obj2.lon)
+            distance = abs(delta)
 
-        # 3. Рассчитываем аспекты между всеми планетами двух карт
-        for obj1 in person1_chart.objects:
-            # Используем только основные объекты для синастрии, чтобы избежать избыточности
-            if obj1.id not in (PLANET_IDS + ANGLE_IDS):
-                continue
-            
-            for obj2 in person2_chart.objects:
-                if obj2.id not in (PLANET_IDS + ANGLE_IDS):
-                    continue
+            for aspect_type, max_orb in TRANSIT_ORBS.items():
+                orb = abs(distance - EXACT_ANGLES[aspect_type])
+                if orb <= max_orb:
+                    aspects.append({
+                        "person1_object": obj1.id,
+                        "aspect": ASPECT_NAMES[aspect_type],
+                        "person2_object": obj2.id,
+                        "orb": round(orb, 2),
+                    })
+                    break
 
-                distance = abs(obj1.lon - obj2.lon)
-                if distance > 180:
-                    distance = 360 - distance
+    aspects.sort(key=lambda a: (a["orb"], a["person1_object"], a["person2_object"]))
+    return {"synastry_aspects": aspects}
 
-                # Используем стандартные орбисы для синастрии (можно настроить)
-                for aspect_type, max_orb in TRANSIT_ORBS.items():
-                    if aspect_type == const.NO_ASPECT:
-                        continue
 
-                    # Рассчитываем точный угол для каждого аспекта
-                    if aspect_type == const.CONJUNCTION:
-                        exact_angle = 0
-                    elif aspect_type == const.OPPOSITION:
-                        exact_angle = 180
-                    elif aspect_type == const.SQUARE:
-                        exact_angle = 90
-                    elif aspect_type == const.TRINE:
-                        exact_angle = 120
-                    elif aspect_type == const.SEXTILE:
-                        exact_angle = 60
-                    else:
-                        continue
-
-                    orb = abs(distance - exact_angle)
-                    if orb <= max_orb:
-                        aspect_name = ASPECT_NAMES.get(aspect_type, f"Unknown-{aspect_type}")
-                        synastry_aspects.append({
-                            'person1_object': obj1.id,
-                            'aspect': aspect_name,
-                            'person2_object': obj2.id,
-                            'orb': round(orb, 2),
-                        })
-
-        return {"synastry_aspects": synastry_aspects}
-
-    except Exception as e:
-        logging.error(f"Error in synastry: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An internal error occurred while processing synastry.")
-
-@app.get('/health')
+@app.get("/health")
 def health_check():
-    """Проверка работоспособности сервера."""
+    """Liveness probe plus API capability summary."""
     return {
         "status": "OK",
-        "version": "1.3",
+        "version": APP_VERSION,
         "supported_objects": {
             "planets": PLANET_IDS,
             "special": SPECIAL_OBJECTS,
-            "angles": ANGLE_IDS
+            "angles": ANGLE_IDS,
         },
-        "aspect_types": [ASPECT_NAMES[t] for t in ASPECT_TYPES if t != const.NO_ASPECT]
+        "aspect_types": [ASPECT_NAMES[t] for t in ASPECT_TYPES],
     }

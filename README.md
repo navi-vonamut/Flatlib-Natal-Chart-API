@@ -12,90 +12,109 @@ The add-on is designed to support a wide range of use cases, from simple automat
 
 -----
 
-## 🚀 Key Features (v0.2.0)
+## 🚀 Key Features
 
-  - **Backend Migration to FastAPI**: The server has been completely rewritten from Flask to FastAPI, offering significantly improved performance, asynchronous support, and modern API documentation.
-  - **Natal Chart Calculation**: Get a complete natal chart, including planets, lunar nodes, Lilith (Syzygy), Pars Fortuna, Ascendant, Midheaven, and house cusps.
-  - **Daily, Monthly, & Yearly Horoscopes**: New API endpoints to calculate **transits** and **predictions** for specific dates, months, or years.
-  - **Synastry Calculation**: An all-new endpoint to calculate compatibility between two natal charts.
-  - **LLM Integration Ready**: Designed to provide structured astrological data (JSON) directly to LLMs (e.g., GPT, Claude, Ollama) for personalized interpretations.
-  - **Local & Private**: All computations are performed locally on your Home Assistant server, ensuring sensitive birth data never leaves your network.
+  - **FastAPI backend**: asynchronous, self-documenting (`/docs`), no external calls.
+  - **Natal chart**: 10 planets (Sun through Pluto), lunar nodes, Lilith (Syzygy), Pars Fortuna, Ascendant, Midheaven, all 12 Placidus cusps, plus the **house each body occupies**.
+  - **Aspects**: major natal aspects (conjunction, opposition, trine, square, sextile) with orbs.
+  - **Transits**: daily / monthly / yearly snapshots, plus a `/transits/range` endpoint for a date window with applying/separating state and exact-hit dates.
+  - **Synastry**: cross-aspects between two natal charts, angles included.
+  - **LLM ready**: structured JSON for GPT, Claude, Ollama, or HA REST/template sensors.
+  - **Local & private**: calculations never leave your network.
+
+### Changes in v0.3.0
+
+  - Lunar nodes, Lilith and Pars Fortuna stay in the chart; **Uranus, Neptune and Pluto are no longer silently dropped** (flatlib defaults to the 7 traditional planets - the chart is now built with an explicit object list).
+  - **House placement** returned for every body and angle.
+  - House keys are `House1`…`House12` (previously `House House1`…).
+  - Transits now include the **natal angles (Asc/MC) as targets** and no longer skip a transiting planet aspecting its own natal position - the annual Sun return, for example, now appears.
+  - `is_applying` / `is_exact` are computed from longitudes and speeds instead of being hardcoded.
+  - **Fixed:** `/predict/monthly` and `/predict/yearly` cast transits from the birth date instead of the current date; `YYYY/MM/DD` input no longer 500s; `/predict/yearly` no longer ignores its own request model.
+  - `/transits/range` added; `GET /` redirects to `/docs`; `/health` reports the real version.
 
 -----
 
 ## 🔧 Installation
 
-To install this add-on in your Home Assistant instance:
-
-1.  **Add the Add-on Repository:**
-      - Click the button below to add this repository to your Home Assistant Add-on Store:
-        [](https://www.google.com/search?q=%5Bhttps://my.home-assistant.io/redirect/supervisor_add_addon_repository/%3Frepository_url%3Dhttps%253A%252F%252Fgithub.com%252Fnavi-vonamut%252FFlatlib-Natal-Chart-AP%5D\(https://my.home-assistant.io/redirect/supervisor_add_addon_repository/%3Frepository_url%3Dhttps%253A%252F%252Fgithub.com%252Fnavi-vonamut%252FFlatlib-Natal-Chart-AP\))
-      - Or, manually add the repository URL: `https://github.com/navi-vonamut/Flatlib-Natal-Chart-AP`
-2.  **Install the Add-on:**
-      - In the Add-on Store, find "**Flatlib Astrology API**" and click "Install".
+1.  **Add the Add-on Repository** - add this repository URL to the Home Assistant Add-on Store:
+    `https://github.com/Mozburg/Flatlib-Natal-Chart-API`
+2.  **Install the Add-on** - find "**Flatlib Natal Chart API**" in the store and click "Install".
 
 -----
 
 ## 💻 API Endpoints
 
-The FastAPI server is accessible within the Home Assistant Docker network at `http://a0d7b954-flatlib-server:8080`.
+The server is reachable inside the Home Assistant Docker network at `http://a0d7b954-flatlib-server:8080`.
 
-### 1\. Calculate Natal Chart (`POST /natal`)
+All chart requests share one birth-data body. `date` accepts `YYYY-MM-DD` or `YYYY/MM/DD`, `tz` is the
+UTC offset of the birth place:
 
-  * **Request:**
-    ```json
-    {
-      "date": "YYYY-MM-DD",
-      "time": "HH:MM:SS",
-      "tz": "±HH:MM",
-      "lat": LATITUDE,
-      "lon": LONGITUDE
-    }
-    ```
-  * **Response:** A JSON object with all natal chart data, including planets, houses, angles, and aspects.
+```json
+{
+  "date": "1990-05-03",
+  "time": "13:20:00",
+  "tz": "+03:00",
+  "lat": 56.2576,
+  "lon": 43.9827
+}
+```
+
+### 1\. Natal Chart (`POST /natal`)
+
+  * **Response:** `planets` (Sun…Pluto), `special` (nodes, Syzygy, Pars Fortuna), `angles` (Asc, MC), `houses` (`House1`…`House12`, Placidus), `aspects`.
+  * Every body: `sign`, `sign_pos` (degrees into sign), `lon`, `lat`, `speed`, `retrograde`, `house`.
 
 ### 2\. Daily Prediction (`POST /predict/daily`)
 
-  * **Request:** Same body as `/natal` plus a `target_date`.
-    ```json
-    {
-      "date": "1990-05-03",
-      "time": "13:20:00",
-      "tz": "+03:00",
-      "lat": 56.2576,
-      "lon": 43.9827,
-      "target_date": "2025-08-07"
-    }
-    ```
-  * **Response:** Daily astrological predictions based on current transits.
+  * **Request:** birth data plus optional `target_date` (**defaults to today**).
+  * **Response:** `target_date` and `transits`, each with `transit_planet`, `aspect`, `natal_planet`, `orb`, `is_applying`, `is_exact`, `transit_sign`, `natal_sign`, `natal_house`, sorted by tightest orb.
 
 ### 3\. Monthly Prediction (`POST /predict/monthly`)
 
-  * **Request:** Same as `/predict/daily`.
-  * **Response:** Monthly predictions and transit data.
+  * **Request:** birth data plus optional `target_date` (base date, defaults to today).
+  * **Response:** transits cast for the 1st of the following month.
 
 ### 4\. Yearly Prediction (`POST /predict/yearly`)
 
-  * **Request:** Same as `/predict/daily`.
-  * **Response:** Yearly predictions and transit data.
+  * **Request:** birth data plus optional `target_date` (base date, defaults to today).
+  * **Response:** transits cast for January 1 of the following year.
 
-### 5\. Synastry (`POST /synastry`)
+### 5\. Transit Range (`POST /transits/range`)
+
+  * **Request:** birth data plus `start_date`, optional `end_date` (default start + 30 days) and `step_days` (default 1).
+  * **Response:** each aspect pair once, with `first_seen`, `last_seen`, `exact_dates` and `min_orb` - the shape you want for "what happens this month".
+
+### 6\. Synastry (`POST /synastry`)
 
   * **Request:**
     ```json
     {
-      "chart1": { /* natal chart data for person 1 */ },
-      "chart2": { /* natal chart data for person 2 */ }
+      "person1": { "date": "1990-05-03", "time": "13:20:00", "tz": "+03:00", "lat": 56.2576, "lon": 43.9827 },
+      "person2": { "date": "1992-11-08", "time": "04:45:00", "tz": "+03:00", "lat": 56.2576, "lon": 43.9827 }
     }
     ```
-  * **Response:** Compatibility analysis between the two charts.
+  * **Response:** `synastry_aspects` (`person1_object`, `aspect`, `person2_object`, `orb`), sorted by orb.
+
+### 7\. Health (`GET /health`)
+
+  * Returns `status`, `version` and the supported planets, special points, angles and aspect types.
+
+-----
+
+## 🧪 Tests
+
+```bash
+uv venv --python 3.11 .venv
+uv pip install --python .venv/bin/python flatlib==0.2.3 pyswisseph==2.8.0.post1 fastapi python-dateutil httpx pytest
+.venv/bin/python -m pytest tests/ -q
+```
 
 -----
 
 ## 🛠️ Tech Stack
 
-  * **Python:** 3.11+
-  * **`fastapi`**: The high-performance backend server.
+  * **Python:** 3.11
+  * **`fastapi`** + **`uvicorn`**: the backend server
   * **`flatlib`**: `0.2.3`
   * **`pyswisseph`**: `2.8.0.post1`
 
@@ -103,10 +122,10 @@ The FastAPI server is accessible within the Home Assistant Docker network at `ht
 
 ## 🤝 Contribution
 
-Contributions are welcome\! If you have suggestions or find issues, please open an issue or submit a pull request on GitHub.
+Contributions are welcome! Open an issue or a pull request on GitHub.
 
 -----
 
 ## 📄 License
 
-This project is licensed under the [MIT License](https://www.google.com/search?q=LICENSE).
+MIT
